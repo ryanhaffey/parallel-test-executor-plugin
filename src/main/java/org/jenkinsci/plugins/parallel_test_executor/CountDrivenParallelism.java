@@ -12,17 +12,19 @@ import org.jenkinsci.Symbol;
  */
 public class CountDrivenParallelism extends Parallelism {
     public int size;
-
+    public String testRetrieveMatch;
+    
     @DataBoundConstructor
-    public CountDrivenParallelism(int size) {
+    public CountDrivenParallelism(int size, String testRetrieveMatch ) {
         this.size = size;
+        this.testRetrieveMatch = testRetrieveMatch;        
     }
 
     @Override
     public int calculate(List<TestClass> tests) {
         return size;
     }
-
+    
     @Symbol("count")
     @Extension
     public static class DescriptorImpl extends Descriptor<Parallelism> {

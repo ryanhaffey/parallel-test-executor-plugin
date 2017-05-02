@@ -20,6 +20,9 @@ f.entry(title:"Degree of parallelism", field:"parallelism") {
 f.entry(title:"Test report directory in the test job", field:"testReportFiles") {
     f.textbox()
 }
+f.entry(title:"Tests to match for split retrieval", field:"testRetrieveMatch") {
+    f.textbox()
+}
 f.block {
     f.entry(title:'Parameters for test job', help:descriptor.getHelpFile('parameters')) {
         f.repeatableHeteroProperty(

@@ -1,7 +1,8 @@
 package org.jenkinsci.plugins.parallel_test_executor;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
-import hudson.tasks.junit.ClassResult;
+//import hudson.tasks.junit.ClassResult;
+import hudson.tasks.junit.CaseResult;
 import org.jenkinsci.plugins.parallel_test_executor.ParallelTestExecutor.Knapsack;
 
 /**
@@ -9,20 +10,22 @@ import org.jenkinsci.plugins.parallel_test_executor.ParallelTestExecutor.Knapsac
  */
 @SuppressFBWarnings(value="EQ_COMPARETO_USE_OBJECT_EQUALS", justification="Cf. justification in Knapsack.")
 public class TestClass implements Comparable<TestClass> {
-    String className;
+    String caseName;
     long duration;
     /**
      * Knapsack that this test class belongs to.
      */
     Knapsack knapsack;
 
-    public TestClass(ClassResult cr) {
-        String pkgName = cr.getParent().getName();
-        if (pkgName.equals("(root)"))   // UGH
-            pkgName = "";
-        else
-            pkgName += '.';
-        this.className = pkgName+cr.getName();
+    public TestClass(CaseResult cr) {
+        String className = cr.getClassName();
+        // String pkgName = cr.getPackageName();
+
+        // if (pkgName.equals("(root)"))   // UGH
+        //     pkgName = "";
+        // else
+        //     pkgName += '.';
+        this.caseName = className+"::"+cr.getName();
         this.duration = (long)(cr.getDuration()*1000);  // milliseconds is a good enough precision for us
     }
 
@@ -35,6 +38,6 @@ public class TestClass implements Comparable<TestClass> {
     }
 
     public String getSourceFileName(String extension) {
-        return className.replace('.','/')+extension;
+        return caseName.replace('.','/')+extension;
     }
 }

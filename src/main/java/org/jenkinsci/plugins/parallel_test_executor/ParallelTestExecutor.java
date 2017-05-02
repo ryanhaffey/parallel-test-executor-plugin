@@ -12,6 +12,7 @@ import hudson.plugins.parameterizedtrigger.*;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.Builder;
 import hudson.tasks.junit.ClassResult;
+import hudson.tasks.junit.CaseResult;
 import hudson.tasks.junit.JUnitResultArchiver;
 import hudson.tasks.test.AbstractTestResultAction;
 import hudson.tasks.test.TabulatedResult;
@@ -45,15 +46,17 @@ public class ParallelTestExecutor extends Builder {
     private String testReportFiles;
     private boolean doNotArchiveTestResults = false;
     private List<AbstractBuildParameters> parameters;
+    private String testRetrieveMatch;
 
     @DataBoundConstructor
-    public ParallelTestExecutor(Parallelism parallelism, String testJob, String patternFile, String testReportFiles, boolean archiveTestResults, List<AbstractBuildParameters> parameters) {
+    public ParallelTestExecutor(Parallelism parallelism, String testJob, String patternFile, String testReportFiles, boolean archiveTestResults, List<AbstractBuildParameters> parameters, String testRetrieveMatch) {
         this.parallelism = parallelism;
         this.testJob = testJob;
         this.patternFile = patternFile;
         this.testReportFiles = testReportFiles;
         this.parameters = parameters;
         this.doNotArchiveTestResults = !archiveTestResults;
+        this.testRetrieveMatch = testRetrieveMatch;
     }
 
     public Parallelism getParallelism() {
@@ -90,6 +93,10 @@ public class ParallelTestExecutor extends Builder {
         return parameters;
     }
 
+    public String getTestRetrieveMatch() {
+        return testRetrieveMatch;
+    }
+
     /**
      * {@link org.jenkinsci.plugins.parallel_test_executor.TestClass}es are divided into multiple sets of roughly equal size.
      */
@@ -122,7 +129,7 @@ public class ParallelTestExecutor extends Builder {
         }
         FilePath dir = workspace.child("test-splits");
         dir.deleteRecursive();
-        List<InclusionExclusionPattern> splits = findTestSplits(parallelism, build, listener, includesPatternFile != null);
+        List<InclusionExclusionPattern> splits = findTestSplits(parallelism, build, listener, includesPatternFile != null, "test");
         for (int i = 0; i < splits.size(); i++) {
             InclusionExclusionPattern pattern = splits.get(i);
             try (OutputStream os = dir.child("split." + i + "." + (pattern.isIncludes() ? "include" : "exclude") + ".txt").write();
@@ -143,22 +150,35 @@ public class ParallelTestExecutor extends Builder {
         return true;
     }
 
-    static List<InclusionExclusionPattern> findTestSplits(Parallelism parallelism, Run<?,?> build, TaskListener listener, boolean generateInclusions) {
+    static List<InclusionExclusionPattern> findTestSplits(Parallelism parallelism, Run<?,?> build, TaskListener listener, boolean generateInclusions, String testRetrieveMatch ) {
         TestResult tr = findPreviousTestResult(build, listener);
         if (tr == null) {
             listener.getLogger().println("No record available, so executing everything in one place");
             return Collections.singletonList(new InclusionExclusionPattern(Collections.<String>emptyList(), false));
         } else {
-
-            Map<String/*fully qualified class name*/, TestClass> data = new TreeMap<>();
-            collect(tr, data);
-
+            Map<String/*fully qualified case name*/, TestClass> data = new TreeMap<>();
+            System.out.println("testRetrieveMatch"+testRetrieveMatch);
+            if (testRetrieveMatch != null){
+                Map<String/*fully qualified case name*/, TestClass> unFiltererdData = new TreeMap<>();
+                collect(tr, unFiltererdData);
+		        for (Map.Entry<String, TestClass> entry : unFiltererdData.entrySet()) {
+		            if (entry.getKey().matches("(.*)"+testRetrieveMatch+"(.*)")) {
+		                data.put(entry.getKey(), entry.getValue());
+		            }
+		        }
+		    }
+		    else {
+                collect(tr, data);
+            }
+         
             // sort in the descending order of the duration
             List<TestClass> sorted = new ArrayList<>(data.values());
+            System.out.println(sorted.size());
             Collections.sort(sorted);
 
             // degree of the parallelism. we need minimum 1
             final int n = Math.max(1, parallelism.calculate(sorted));
+
 
             List<Knapsack> knapsacks = new ArrayList<>(n);
             for (int i = 0; i < n; i++)
@@ -173,12 +193,15 @@ public class ParallelTestExecutor extends Builder {
             for (TestClass d : sorted) {
                 Knapsack k = q.poll();
                 k.add(d);
+                //System.out.println(d.getSourceFileName(".out"));
                 q.add(k);
             }
+            System.out.println(q.size());
 
             long total = 0, min = Long.MAX_VALUE, max = Long.MIN_VALUE;
             for (Knapsack k : knapsacks) {
                 total += k.total;
+                System.out.println(total);
                 max = Math.max(max, k.total);
                 min = Math.min(min, k.total);
             }
@@ -193,14 +216,15 @@ public class ParallelTestExecutor extends Builder {
                     data.size(), total, n, min, average, max, stddev);
 
             List<InclusionExclusionPattern> r = new ArrayList<>();
+
             for (int i = 0; i < n; i++) {
                 Knapsack k = knapsacks.get(i);
                 boolean shouldIncludeElements = generateInclusions && i != 0;
                 List<String> elements = new ArrayList<>();
+
                 r.add(new InclusionExclusionPattern(elements, shouldIncludeElements));
                 for (TestClass d : sorted) {
-                    if (shouldIncludeElements == (d.knapsack == k)) {
-                        elements.add(d.getSourceFileName(".java"));
+                    if (d.knapsack == k) {
                         elements.add(d.getSourceFileName(".class"));
                     }
                 }
@@ -243,7 +267,10 @@ public class ParallelTestExecutor extends Builder {
         parameterBindings.add(new MultipleBinaryFileParameterFactory.ParameterBinding(getPatternFile(), "test-splits/split.*.exclude.txt"));
         if (includesPatternFile != null) {
             parameterBindings.add(new MultipleBinaryFileParameterFactory.ParameterBinding(getIncludesPatternFile(), "test-splits/split.*.include.txt"));
+
         }
+        System.out.println(parameterBindings);
+
         MultipleBinaryFileParameterFactory factory = new MultipleBinaryFileParameterFactory(parameterBindings);
         BlockableBuildTriggerConfig config = new BlockableBuildTriggerConfig(
                 testJob,
@@ -264,10 +291,10 @@ public class ParallelTestExecutor extends Builder {
      * Recursive visits the structure inside {@link hudson.tasks.test.TestResult}.
      */
     static private void collect(TestResult r, Map<String, TestClass> data) {
-        if (r instanceof ClassResult) {
-            ClassResult cr = (ClassResult) r;
+        if (r instanceof CaseResult) {
+            CaseResult cr = (CaseResult) r;
             TestClass dp = new TestClass(cr);
-            data.put(dp.className, dp);
+            data.put(dp.caseName, dp);
             return; // no need to go deeper
         }
         if (r instanceof TabulatedResult) {
